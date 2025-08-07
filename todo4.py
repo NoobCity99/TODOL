@@ -4,11 +4,68 @@ import json
 from PyQt6.QtWidgets import (
     QApplication, QWidget, QVBoxLayout, QHBoxLayout,
     QLineEdit, QPushButton, QScrollArea, QCheckBox, QLabel,
-    QMessageBox, QFrame
+    QMessageBox, QFrame, QDialog, QDialogButtonBox,
+    QDateTimeEdit, QSpinBox
 )
-from PyQt6.QtCore import Qt
+from PyQt6.QtCore import Qt, QDateTime, QTimer
 from PyQt6.QtGui import QIcon
 DATA_FILE = "tasks.json"
+
+
+class TaskCheckBox(QCheckBox):
+    def __init__(self, text, done, parent=None, due=None, reminder_hours=None):
+        super().__init__(text, parent)
+        self.base_text = text
+        self.due = due
+        self.reminder_hours = reminder_hours
+        self.reminder_timer = None
+        self.setChecked(done)
+        self.stateChanged.connect(parent.save_tasks)
+        self.update_text()
+        self.schedule_reminder()
+
+    def update_text(self):
+        text = self.base_text
+        if self.due:
+            text += f" (due: {self.due.toString('yyyy-MM-dd HH:mm')})"
+        self.setText(text)
+
+    def mouseDoubleClickEvent(self, event):
+        app = self.parent()
+        if hasattr(app, 'open_due_dialog'):
+            due, reminder = app.open_due_dialog(self.due, self.reminder_hours)
+            if due is not None:
+                self.due = due
+                self.reminder_hours = reminder
+            else:
+                self.due = None
+                self.reminder_hours = None
+            self.update_text()
+            self.schedule_reminder()
+            app.save_tasks()
+        event.accept()
+
+    def schedule_reminder(self):
+        if self.reminder_timer:
+            self.reminder_timer.stop()
+            self.reminder_timer.deleteLater()
+            self.reminder_timer = None
+        if self.due and self.reminder_hours:
+            msecs_until = QDateTime.currentDateTime().msecsTo(
+                self.due) - self.reminder_hours * 3600 * 1000
+            if msecs_until > 0:
+                self.reminder_timer = QTimer(self)
+                self.reminder_timer.setSingleShot(True)
+
+                def notify():
+                    QMessageBox.information(
+                        self,
+                        "Task Reminder",
+                        f"'{self.base_text}' is due at {self.due.toString('yyyy-MM-dd HH:mm')}"
+                    )
+                self.reminder_timer.timeout.connect(notify)
+                self.reminder_timer.start(msecs_until)
+
 
 # ===========================
 # Main App Class
@@ -20,7 +77,7 @@ class ToDoApp(QWidget):
         super().__init__()
         icon_path = os.path.join(os.path.dirname(__file__), "icon toto.ico")
         self.setWindowIcon(QIcon(icon_path))
-        self.setWindowTitle("To-Do List App")
+        self.setWindowTitle("TODOL")
         self.setGeometry(300, 100, 400, 500)
         self.setStyleSheet(self.load_styles())
 
@@ -69,22 +126,23 @@ class ToDoApp(QWidget):
     def add_task(self):
         task_text = self.task_input.text().strip()
         if task_text:
-            self.create_task_widget(task_text, False)
+            due, reminder = self.open_due_dialog()
+            self.create_task_widget(task_text, False, due, reminder)
             self.task_input.clear()
             self.save_tasks()
         else:
             QMessageBox.warning(self, "Empty Task", "Please enter a task.")
 
-    def create_task_widget(self, text, done):
-        checkbox = QCheckBox(text)
-        checkbox.setChecked(done)
-        checkbox.stateChanged.connect(self.save_tasks)
+    def create_task_widget(self, text, done, due=None, reminder=None):
+        checkbox = TaskCheckBox(text, done, self, due, reminder)
         self.task_container.addWidget(checkbox)
         self.tasks.append(checkbox)
 
     def remove_completed(self):
         for task in self.tasks[:]:
             if task.isChecked():
+                if task.reminder_timer:
+                    task.reminder_timer.stop()
                 self.task_container.removeWidget(task)
                 task.setParent(None)
                 self.tasks.remove(task)
@@ -95,14 +153,20 @@ class ToDoApp(QWidget):
                                      QMessageBox.StandardButton.Yes | QMessageBox.StandardButton.No)
         if reply == QMessageBox.StandardButton.Yes:
             for task in self.tasks:
+                if task.reminder_timer:
+                    task.reminder_timer.stop()
                 self.task_container.removeWidget(task)
                 task.setParent(None)
             self.tasks.clear()
             self.save_tasks()
 
     def save_tasks(self):
-        data = [{"task": task.text(), "done": task.isChecked()}
-                for task in self.tasks]
+        data = [{
+            "task": task.base_text,
+            "done": task.isChecked(),
+            "due": task.due.toString(Qt.DateFormat.ISODate) if task.due else None,
+            "reminder": task.reminder_hours,
+        } for task in self.tasks]
         with open(DATA_FILE, "w") as f:
             json.dump(data, f, indent=2)
 
@@ -112,10 +176,58 @@ class ToDoApp(QWidget):
                 with open(DATA_FILE, "r") as f:
                     data = json.load(f)
                 for item in data:
-                    self.create_task_widget(item["task"], item["done"])
+                    due = QDateTime.fromString(
+                        item.get("due"), Qt.DateFormat.ISODate) if item.get("due") else None
+                    self.create_task_widget(
+                        item["task"], item["done"], due, item.get("reminder"))
             except Exception as e:
                 QMessageBox.critical(
                     self, "Error", f"Failed to load tasks:\n{e}")
+
+    def open_due_dialog(self, existing_due=None, existing_reminder=None):
+        dialog = QDialog(self)
+        dialog.setWindowTitle("Due Date")
+
+        layout = QVBoxLayout(dialog)
+        enable_box = QCheckBox("Enable Due Date")
+        layout.addWidget(enable_box)
+
+        due_edit = QDateTimeEdit()
+        due_edit.setCalendarPopup(True)
+        due_edit.setDateTime(existing_due or QDateTime.currentDateTime())
+        layout.addWidget(due_edit)
+
+        reminder_label = QLabel("Reminder (hours before):")
+        reminder_spin = QSpinBox()
+        reminder_spin.setRange(1, 24)
+        reminder_spin.setValue(existing_reminder or 1)
+        layout.addWidget(reminder_label)
+        layout.addWidget(reminder_spin)
+
+        buttons = QDialogButtonBox(
+            QDialogButtonBox.StandardButton.Ok | QDialogButtonBox.StandardButton.Cancel)
+
+        layout.addWidget(buttons)
+        buttons.accepted.connect(dialog.accept)
+        buttons.rejected.connect(dialog.reject)
+
+        if existing_due:
+            enable_box.setChecked(True)
+        else:
+            due_edit.setEnabled(False)
+            reminder_label.setEnabled(False)
+            reminder_spin.setEnabled(False)
+
+        def toggle(state):
+            due_edit.setEnabled(state)
+            reminder_label.setEnabled(state)
+            reminder_spin.setEnabled(state)
+
+        enable_box.toggled.connect(toggle)
+
+        if dialog.exec() == QDialog.DialogCode.Accepted and enable_box.isChecked():
+            return due_edit.dateTime(), reminder_spin.value()
+        return None, None
 
     def load_styles(self):
         return """
