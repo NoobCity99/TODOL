@@ -1,0 +1,14 @@
+[
+  {
+    "task": "Make this App Better",
+    "done": false
+  },
+  {
+    "task": "Upload todo project to github",
+    "done": false
+  },
+  {
+    "task": "Improve app using CODEX",
+    "done": false
+  }
+]
