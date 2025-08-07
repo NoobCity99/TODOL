@@ -7,6 +7,7 @@ from PyQt6.QtWidgets import (
     QMessageBox, QFrame
 )
 from PyQt6.QtCore import Qt
+from PyQt6.QtGui import QIcon
 
 DATA_FILE = "tasks.json"
 
@@ -18,6 +19,8 @@ DATA_FILE = "tasks.json"
 class ToDoApp(QWidget):
     def __init__(self):
         super().__init__()
+        icon_path = os.path.join(os.path.dirname(__file__), "toto.ico")
+        self.setWindowIcon(QIcon(icon_path))
         self.setWindowTitle("To-Do List App")
         self.setGeometry(300, 100, 400, 500)
         self.setStyleSheet(self.load_styles())
